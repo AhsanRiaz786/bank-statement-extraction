@@ -1,0 +1,34 @@
+Task: You are a data extraction engine. Analyze the bank statement text from PAGE 1 provided below. Extract all the header information (bank name, account details, summary) and ONLY the transactions visible on this first page.
+
+Instructions:
+1. Your entire response must be only a single JSON object.
+2. All dates must be in YYYY-MM-DD format.
+3. All monetary values must be numbers.
+4. If a value is not found, use null.
+
+JSON Schema:
+{
+  "bank_name": "string | null",
+  "account_holder_name": "string | null",
+  "business_name": "string | null",
+  "account_number": "string | null",
+  "iban": "string | null",
+  "statement_period_start": "string (YYYY-MM-DD) | null",
+  "statement_period_end": "string (YYYY-MM-DD) | null",
+  "currency": "string | null",
+  "summary": {
+    "opening_balance": "number | null",
+    "closing_balance": "number | null"
+  },
+  "transactions": [
+    {
+      "date": "string (YYYY-MM-DD) | null",
+      "description": "string | null",
+      "debit": "number | null",
+      "credit": "number | null",
+      "running_balance": "number | null"
+    }
+  ]
+}
+
+Page 1 Text to Process:
