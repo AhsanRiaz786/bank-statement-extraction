@@ -1,3 +1,4 @@
+
 import json
 import os
 import argparse
@@ -7,17 +8,21 @@ import glob
 from pypdf import PdfReader, PdfWriter
 from typing import List, Optional, Dict, Any
 
-# LangChain Imports
+# LangChain and Docling Imports
+from langchain_docling import DoclingLoader
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
-# Unstructured PDF Processing
-from unstructured.partition.pdf import partition_pdf
+# Advanced Docling Configuration Imports
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from langchain_docling.loader import ExportType
 
-def run_unstructured_pipeline(pdf_path: str, model_name: str, output_path: str):
+def run_docling_pipeline(pdf_path: str, model_name: str, output_path: str):
     """
-    Splits a PDF into individual pages, processes each page with unstructured and an LLM,
+    Splits a PDF into individual pages, processes each page with Docling and an LLM,
     extracts only transactions, and saves them to a single CSV file.
     """
     if not os.path.exists(pdf_path):
@@ -31,7 +36,7 @@ def run_unstructured_pipeline(pdf_path: str, model_name: str, output_path: str):
     # --- 1. Prompts and LLM Setup ---
     first_page_prompt = PromptTemplate(
         template="""
-        You are a data extraction engine. Analyze the bank statement HTML table data from PAGE 1 provided below. Extract ONLY the transaction line items visible on this page AND identify the column headers with their positions.
+        You are a data extraction engine. Analyze the bank statement text from PAGE 1 provided below. Extract ONLY the transaction line items visible on this page AND identify the column headers with their positions.
 
         Instructions:
         1. Output a JSON object with "transactions" array and "column_structure" object.
@@ -47,28 +52,20 @@ def run_unstructured_pipeline(pdf_path: str, model_name: str, output_path: str):
         11. Extract ALL column headers present in the first page, including their exact positions (1st column, 2nd column, etc.).
         12. Map the actual column names to standardized field names in the transactions.
         13. CRITICAL: Record the exact order/position of columns as they appear in the table.
-        14. CRITICAL: For transactions, include ALL fields that exist in the document, not just the standard ones.
-        15. CRITICAL: Each transaction object should have a field for EVERY column detected in the table.
-        16. Use descriptive field names for non-standard columns (e.g., "cheque_number", "branch_code", "transaction_type").
-        17. ONLY RETURN THE JSON AND NOTHING ELSE. NO EXTRA TEXT OR COMMENTS.
+        14. ONLY include fields that actually exist in the document. Do not create placeholder fields.
+        15. ONLY RETURN THE JSON AND NOTHING ELSE. NO EXTRA TEXT OR COMMENTS.
 
-        JSON Schema (adapt based on actual columns found):
+        JSON Schema:
         {{
           "transactions": [
             {{
-              // Include ALL fields corresponding to ALL columns found in the table
-              // Standard fields:
               "date": "string (YYYY-MM-DD) | null",
               "description": "string | null", 
               "debit": "number | null",
               "credit": "number | null",
               "running_balance": "number | null",
-              "reference": "string | null",
-              // Additional fields based on actual columns found:
-              "cheque_number": "string | null",
-              "branch_code": "string | null",
-              "transaction_type": "string | null"
-              // Add more fields as needed based on the actual table structure
+              "reference": "string | null"
+              // Only include additional fields if they actually exist in the document
             }}
           ],
           "column_structure": {{
@@ -84,40 +81,30 @@ def run_unstructured_pipeline(pdf_path: str, model_name: str, output_path: str):
           }}
         }}
 
-        IMPORTANT: 
-        - For transactions, create a field for EVERY column in the table
-        - Use descriptive names for non-standard columns
-        - Every transaction should have the same set of fields (use null for missing values)
-        - The transaction fields should match exactly with the standardized_field names in column_structure
-
-        EXAMPLE HTML:
-        <table>
-        <tr><th>Date</th><th>Particulars</th><th>Cheque No</th><th>Withdrawal</th><th>Deposit</th><th>Balance</th><th>Branch</th><th>Reference</th></tr>
-        <tr><td>01-Jan-2024</td><td>SALARY CREDIT</td><td></td><td></td><td>50000.00</td><td>75000.00</td><td>001</td><td>SAL001</td></tr>
-        <tr><td>02-Jan-2024</td><td>ATM WITHDRAWAL 1234</td><td></td><td>5000.00</td><td></td><td>70000.00</td><td>001</td><td>ATM123</td></tr>
-        </table>
-
+        EXAMPLE:
+        ```markdown
+        | Date       | Particulars         | Withdrawal | Deposit | Balance  | Reference |
+        |------------|---------------------|------------|---------|----------|-----------|
+        | 01-Jan-2024| SALARY CREDIT       |            | 50000.00| 75000.00 | SAL001    |
+        | 02-Jan-2024| ATM WITHDRAWAL 1234 | 5000.00    |         | 70000.00 | ATM123    |
+        ```
         Output:
         {{
           "transactions": [
             {{
               "date": "2024-01-01",
               "description": "SALARY CREDIT",
-              "cheque_number": null,
               "debit": null,
               "credit": 50000.00,
               "running_balance": 75000.00,
-              "branch_code": "001",
               "reference": "SAL001"
             }},
             {{
               "date": "2024-01-02", 
               "description": "ATM WITHDRAWAL 1234",
-              "cheque_number": null,
               "debit": 5000.00,
               "credit": null,
               "running_balance": 70000.00,
-              "branch_code": "001",
               "reference": "ATM123"
             }}
           ],
@@ -137,47 +124,37 @@ def run_unstructured_pipeline(pdf_path: str, model_name: str, output_path: str):
               }},
               {{
                 "position": 3,
-                "header_name": "Cheque No",
-                "data_type": "other",
-                "standardized_field": "cheque_number"
-              }},
-              {{
-                "position": 4,
                 "header_name": "Withdrawal",
                 "data_type": "debit",
                 "standardized_field": "debit"
               }},
               {{
-                "position": 5,
+                "position": 4,
                 "header_name": "Deposit",
                 "data_type": "credit",
                 "standardized_field": "credit"
               }},
               {{
-                "position": 6,
+                "position": 5,
                 "header_name": "Balance",
                 "data_type": "balance",
                 "standardized_field": "running_balance"
               }},
               {{
-                "position": 7,
-                "header_name": "Branch",
-                "data_type": "other",
-                "standardized_field": "branch_code"
-              }},
-              {{
-                "position": 8,
+                "position": 6,
                 "header_name": "Reference",
                 "data_type": "reference",
                 "standardized_field": "reference"
               }}
             ],
-            "total_columns": 8
+            "total_columns": 6
           }}
         }}
 
-        Extract from HTML table data:
+        Extract from:
+        ```markdown
         {document_text}
+        ```
         """,
         input_variables=["document_text"],
     )
@@ -221,11 +198,15 @@ def run_unstructured_pipeline(pdf_path: str, model_name: str, output_path: str):
         
         json_example = "{\n" + ",\n".join(json_example_fields) + "\n    }" if json_example_fields else '{\n      "date": "2024-01-01",\n      "description": "example",\n      "debit": 1000.50,\n      "credit": null,\n      "running_balance": 5000.00\n    }'
 
-        # Escape braces to prevent LangChain template variable issues
+        # --- START: CODE FIX ---
+        # The original code inserted `json_example` directly into the template string.
+        # This caused LangChain to misinterpret the curly braces inside the JSON as template variables.
+        # The fix is to escape these braces by replacing `{` with `{{` and `}` with `}}`.
         escaped_json_example = json_example.replace("{", "{{").replace("}", "}}")
+        # --- END: CODE FIX ---
 
         # Create the template string using the *escaped* JSON example
-        template_str = f"""You are a data extraction engine. Analyze the bank statement HTML table data from a subsequent page provided below. Extract ONLY the transaction line items visible on this page.
+        template_str = f"""You are a data extraction engine. Analyze the bank statement text from a subsequent page provided below. Extract ONLY the transaction line items visible on this page.
 
 {column_mapping_info}
 
@@ -235,7 +216,6 @@ CRITICAL INSTRUCTIONS FOR COLUMN MAPPING:
 3. If you see a table with data rows, map them in this exact order:{explicit_mapping}
 4. Look for the table structure even if headers are missing - the data should follow the same column order as page 1.
 5. IMPORTANT: Use column position (1st, 2nd, 3rd, etc.) not header names for mapping.
-6. CRITICAL: Each transaction must have ALL the fields defined in the column structure (use null for missing values).
 
 General Instructions:
 1. Output a single JSON array [...] of transaction objects, no other text or keys.
@@ -248,16 +228,16 @@ General Instructions:
 8. Some transactions can span across multiple rows, so extract all information from the rows.
 9. If debit or credit transactions are present in one column then figure out the transaction type from context.
 10. Only include fields that were identified in the first page structure.
-11. EVERY transaction object must have the SAME set of fields as defined in the column structure.
-12. CRITICAL: ONLY RETURN THE JSON AND NOTHING ELSE. NO EXTRA TEXT OR COMMENTS.
 
 JSON Example (use null for missing values):
 [
   {escaped_json_example}
 ]
 
-Extract from HTML table data:
-{{document_text}}"""
+Extract from:
+```markdown
+{{document_text}}
+```"""
 
         return PromptTemplate(
             template=template_str,
@@ -296,43 +276,31 @@ Extract from HTML table data:
             page_num = i + 1
             print(f"\n--- Processing Page {page_num} of {len(page_files)} ---")
             
-            # --- 3a. Extract table data using unstructured partition_pdf ---
+            # --- 3a. Convert page PDF to Markdown using Docling ---
+            pipeline_options = PdfPipelineOptions(do_table_structure=True)
+            pipeline_options.table_structure_options.do_cell_matching = True
+            pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
+            docling_format_options = {InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+            converter = DocumentConverter(format_options=docling_format_options)
+            
+            loader = DoclingLoader(
+                file_path=page_pdf,
+                export_type=ExportType.MARKDOWN,
+                converter=converter
+            )
+            
             try:
-                print(f"Running unstructured partition_pdf on page {page_num}...")
-                elements = partition_pdf(
-                    filename=page_pdf,
-                    extract_images_in_pdf=False,
-                    strategy="hi_res",
-                    infer_table_structure=True,
-                    hi_res_model_name="detectron2_onnx"
-                )
-                
-                # Filter for table elements and get HTML
-                tables = [e for e in elements if e.category == "Table"]
-                
-                if not tables:
-                    print(f"Warning: No tables found on page {page_num}.")
+                print(f"Running Docling on page {page_num}...")
+                page_docs = loader.load()
+                if not page_docs or not page_docs[0].page_content.strip():
+                    print(f"Warning: No content extracted from page {page_num}.")
                     continue
-                
-                # Combine all table HTML from the page
-                table_html_content = ""
-                for j, table in enumerate(tables):
-                    if hasattr(table, 'metadata') and hasattr(table.metadata, 'text_as_html'):
-                        table_html_content += f"\n<!-- Table {j+1} -->\n{table.metadata.text_as_html}\n"
-                    else:
-                        # Fallback to text content if HTML not available
-                        table_html_content += f"\n<!-- Table {j+1} (text fallback) -->\n{str(table)}\n"
-                
-                if not table_html_content.strip():
-                    print(f"Warning: No table content extracted from page {page_num}.")
-                    continue
-                
-                # Save HTML content to debug file
-                with open(os.path.join(debug_dir, f"page_{page_num}_html.txt"), "w", encoding="utf-8") as f:
-                    f.write(table_html_content)
-                    
+                markdown_content = page_docs[0].page_content
+                # Save markdown content to debug file
+                with open(os.path.join(debug_dir, f"page_{page_num}_markdown.txt"), "w", encoding="utf-8") as f:
+                    f.write(markdown_content)
             except Exception as e:
-                print(f"Error running unstructured on page {page_num}: {e}")
+                print(f"Error running Docling on page {page_num}: {e}")
                 continue
 
             # --- 3b. Extract transactions using the appropriate chain ---
@@ -342,7 +310,7 @@ Extract from HTML table data:
                 
                 if page_num == 1:
                     # First page: extract both transactions and column structure
-                    result = first_page_chain.invoke({"document_text": table_html_content})
+                    result = first_page_chain.invoke({"document_text": markdown_content})
                     extracted_data = result
                     
                     # Save raw LLM output
@@ -390,7 +358,7 @@ Extract from HTML table data:
                             field = col_info.get('standardized_field', 'unknown')
                             print(f"  Column {pos} → '{field}'")
                     
-                    result = next_page_chain.invoke({"document_text": table_html_content})
+                    result = next_page_chain.invoke({"document_text": markdown_content})
                     extracted_data = result
                     
                     # Save raw LLM output
@@ -451,7 +419,7 @@ Extract from HTML table data:
         df.to_csv(output_path, index=False, encoding='utf-8')
         
         print("\n" + "="*80)
-        print("Unstructured pipeline completed successfully!")
+        print("Chunked pipeline completed successfully!")
         print(f"Final aggregated CSV saved to: {output_path}")
         print(f"Total transactions extracted: {len(df)}")
         print(f"Columns in final output: {list(df.columns)}")
@@ -463,7 +431,7 @@ Extract from HTML table data:
         print(f"An error occurred while creating or saving the CSV file: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the full unstructured+LangChain extraction pipeline.")
+    parser = argparse.ArgumentParser(description="Run the full Docling+LangChain extraction pipeline.")
     parser.add_argument("input_pdf", help="The path to the input PDF file.")
     parser.add_argument("--model", default="llama3:8b-instruct", help="The name of the Ollama model to use.")
     args = parser.parse_args()
@@ -471,4 +439,4 @@ if __name__ == "__main__":
     base_name = os.path.splitext(os.path.basename(args.input_pdf))[0]
     output_filename = f"{base_name}_final_data.csv"
 
-    run_unstructured_pipeline(pdf_path=args.input_pdf, model_name=args.model, output_path=output_filename)
+    run_docling_pipeline(pdf_path=args.input_pdf, model_name=args.model, output_path=output_filename)

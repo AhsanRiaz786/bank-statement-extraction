@@ -1,3 +1,7 @@
 myenv/
 *.pdf
-.txt
+*.txt
+*.csv
+.DS_Store
+__pycache__/
+*.pyc
