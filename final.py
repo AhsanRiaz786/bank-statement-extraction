@@ -128,9 +128,45 @@ def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int 
                         column_structure = result['column_structure']
                         column_order = column_structure.get('column_order', [])
                         
+                        # --- START: De-duplicate standardized field names to prevent collisions ---
+                        seen_fields = set()
+                        for col in column_order:
+                            original_field = col.get('standardized_field')
+                            
+                            if not original_field:
+                                continue # Will be handled by the fallback logic later
+
+                            if original_field in seen_fields:
+                                # Duplicate found, create a new unique name from the header
+                                header_name = col.get('header_name', 'custom_field')
+                                new_field = (
+                                    header_name.lower()
+                                    .replace(' ', '_')
+                                    .replace('.', '')
+                                    .replace('#', 'no')
+                                    .replace('/', '_')
+                                    .replace('-', '_')
+                                    .replace('(', '')
+                                    .replace(')', '')
+                                )
+                                
+                                # Ensure it's truly unique by appending a number if needed
+                                counter = 2
+                                temp_field = new_field
+                                while temp_field in seen_fields:
+                                    temp_field = f"{new_field}_{counter}"
+                                    counter += 1
+                                new_field = temp_field
+                                
+                                col['standardized_field'] = new_field
+                                seen_fields.add(new_field)
+                            else:
+                                seen_fields.add(original_field)
+                        # --- END: De-duplicate standardized field names ---
+
                         # Fix any missing standardized_field entries
                         for col in column_order:
-                            if 'standardized_field' not in col:
+                            if 'standardized_field' not in col or not col.get('standardized_field'):
                                 # Auto-generate standardized field based on data_type
                                 data_type = col.get('data_type', 'unknown')
                                 if data_type == 'date':
