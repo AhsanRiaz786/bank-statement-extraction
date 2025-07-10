@@ -327,6 +327,16 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
     if not column_structure:
         print("❌ Could not detect table structure. Exiting.")
         return
+        
+    # Identify debit/credit fields that should always be positive
+    positive_fields = []
+    for col in column_structure.get('column_order', []):
+        if col.get('data_type') in ['debit', 'credit']:
+            if standardized_field := col.get('standardized_field'):
+                positive_fields.append(standardized_field)
+    
+    if positive_fields:
+        print(f"ⓘ Forcing positive values for: {positive_fields}")
     
     # Save detected structure
     with open(os.path.join(debug_dir, "detected_column_structure.json"), "w") as f:
@@ -411,6 +421,18 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                 
                 if isinstance(result, list):
                     valid_transactions = [tx for tx in result if tx and isinstance(tx, dict)]
+                    
+                    # Post-process to ensure debit/credit fields are always positive
+                    if positive_fields:
+                        for tx in valid_transactions:
+                            for field in positive_fields:
+                                if field in tx and tx[field] is not None:
+                                    try:
+                                        numeric_value = float(tx[field])
+                                        tx[field] = abs(numeric_value)
+                                    except (ValueError, TypeError):
+                                        pass  # Keep non-numeric values as is
+                                        
                     all_transactions.extend(valid_transactions)
                     print(f"✓ Extracted {len(valid_transactions)} transactions from page {page_num}")
                 else:
