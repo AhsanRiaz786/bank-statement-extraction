@@ -337,6 +337,16 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
     
     if positive_fields:
         print(f"ⓘ Forcing positive values for: {positive_fields}")
+        
+    # Identify date fields for consistent formatting
+    date_fields = []
+    for col in column_structure.get('column_order', []):
+        if col.get('data_type') == 'date':
+            if standardized_field := col.get('standardized_field'):
+                date_fields.append(standardized_field)
+
+    if date_fields:
+        print(f"ⓘ Standardizing date format for: {date_fields}")
     
     # Save detected structure
     with open(os.path.join(debug_dir, "detected_column_structure.json"), "w") as f:
@@ -432,6 +442,20 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                                         tx[field] = abs(numeric_value)
                                     except (ValueError, TypeError):
                                         pass  # Keep non-numeric values as is
+                                        
+                    # Post-process to standardize date formats
+                    if date_fields:
+                        for tx in valid_transactions:
+                            for field in date_fields:
+                                if field in tx and tx[field]:
+                                    try:
+                                        # Use pandas to flexibly parse the date and format it
+                                        standardized_date = pd.to_datetime(tx[field], errors='coerce')
+                                        if pd.notna(standardized_date):
+                                            tx[field] = standardized_date.strftime('%Y-%m-%d')
+                                    except Exception:
+                                        # In case of any other parsing error, keep original
+                                        pass
                                         
                     all_transactions.extend(valid_transactions)
                     print(f"✓ Extracted {len(valid_transactions)} transactions from page {page_num}")
