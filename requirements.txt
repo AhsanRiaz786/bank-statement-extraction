@@ -1,4 +1,14 @@
-pandas
-pypdf
-langchain-docling
-langchain-ollama 
+# Core PDF and Data Processing
+pypdf>=4.0.0
+pandas>=2.0.0
+
+# Docling for PDF table extraction
+docling>=1.0.0
+langchain-docling>=0.1.0
+
+# LangChain for LLM integration
+langchain-core>=0.1.0
+langchain-ollama>=0.1.0
+
+# Additional dependencies that may be required
+pydantic>=2.0.0 

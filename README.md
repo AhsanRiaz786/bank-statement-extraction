@@ -1,207 +1,245 @@
-# 🏦 Bank Statement Extractor using Local LLMs
+# 🏦 Bank Statement Extractor
 
-A powerful, local-first bank statement extraction tool that uses [Docling](https://github.com/docling-io/docling) for high-accuracy document parsing and local Large Language Models (via Ollama) to intelligently extract and structure transaction data from PDF files.
+A powerful, privacy-focused bank statement extraction tool that uses **Docling** for high-accuracy document parsing and **local Large Language Models** (via Ollama) to intelligently extract and structure transaction data from PDF bank statements.
 
-This project streamlines the process of converting messy PDF bank statements into a clean, structured CSV file, ready for analysis. It works by analyzing the first page to understand the table layout and then applies that structure to the rest of the document.
+## ✨ Key Features
 
-## 🚀 Features
+- **🧠 Intelligent Header Detection**: Automatically analyzes the first few pages to understand table structure and column layout
+- **📄 Consistent Processing**: Uses the detected structure to process all pages with standardized prompts
+- **🔒 100% Local & Private**: Runs entirely on your machine - your financial data never leaves your computer
+- **🎯 High Accuracy**: Leverages Docling's TableFormer model for precise PDF table extraction
+- **📊 Clean Output**: Produces a single, structured CSV file with all transactions
+- **🔍 Debug-Friendly**: Saves intermediate files for troubleshooting and verification
 
-- **📄 Page-by-Page Processing**: Splits multi-page PDFs to handle large documents efficiently.
-- **🔬 High-Accuracy Parsing**: Leverages Docling's `TableFormer` model to precisely convert PDF tables into a Markdown format.
-- **🧠 Intelligent Extraction**: Uses a local LLM to identify the transaction table structure on the first page and extract data.
-- **🤖 Dynamic Prompting**: The table structure learned from the first page is used to create specific prompts for subsequent pages, ensuring consistency.
-- **🔒 Privacy-Focused**: Runs entirely on your local machine. Your financial data is never sent to a third-party cloud service.
-- **✅ Single CSV Output**: Aggregates all transactions from all pages into one clean CSV file.
+## 🛠️ How It Works
 
-## 📋 Prerequisites
+The extraction process uses a **two-step approach**:
 
-Before you begin, ensure you have the following installed:
-
-1.  **Python 3.8+**
-2.  **Ollama**: You need a running Ollama instance with a model.
-    - [Download Ollama](https://ollama.com/)
-    - Pull a model to use for extraction. We recommend a smaller, instruction-tuned model for speed.
-      ```bash
-      ollama pull llama3:8b-instruct
-      ```
-
-## ⚡ Quick Start
-
-1.  **Navigate to the project directory:**
-    If you have cloned this project, `cd` into the directory.
-
-2.  **Install the required Python packages:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3.  **Run the extraction pipeline:**
-    Make sure your Ollama application is running. Then, execute the script with your PDF file.
-
-    ```bash
-    python final.py "path/to/your/bank_statement.pdf"
-    ```
-
-    The script will create a CSV file named `bank_statement_final_data.csv` in the same directory.
-
-## 🔧 Usage and Options
-
-You can specify a different Ollama model using the `--model` flag.
-
-```bash
-# Use a different model
-python final.py "path/to/your/statement.pdf" --model "phi3:instruct"
-
-# Use a larger model (may be slower but potentially more accurate)
-python final.py "path/to/your/statement.pdf" --model "llama3:70b-instruct"
-```
-
-### Command-Line Arguments
-- `input_pdf` (Required): The path to the input PDF file.
-- `--model` (Optional): The name of the Ollama model to use. Defaults to `llama3:8b-instruct`.
-
-## ⚙️ How It Works
-
-The extraction process follows these steps:
-
-1.  **PDF Splitting**: The input PDF is split into individual pages in a temporary directory.
-2.  **Page 1 Analysis**:
-    - The first page PDF is converted to Markdown using **Docling**. This preserves the table structure.
-    - A special prompt is sent to the LLM, asking it to extract transactions **and** identify the table's column structure (e.g., column names, order, and data types).
-3.  **Subsequent Page Processing**:
-    - For every other page, the PDF is also converted to Markdown.
-    - A new, dynamic prompt is generated that includes the column structure learned from page 1. This tells the LLM exactly how to map the table columns to the desired JSON fields.
-    - The LLM extracts the transactions based on this structure.
-4.  **Data Aggregation**: All extracted transactions from all pages are collected.
-5.  **CSV Generation**: The final list of transactions is converted into a Pandas DataFrame and saved as a single CSV file. A `transaction_id` is added for convenience.
-
-This two-step approach (analyze-then-extract) makes the process robust, as it doesn't rely on finding headers on every single page.
-
-## 📁 Output
-
-The script generates two main outputs:
-
-1.  **A CSV File**: A file named `{your_pdf_name}_final_data.csv` containing all the extracted transactions. The columns are ordered logically, with any custom fields discovered in the statement appended at the end.
-
-    | transaction_id | date       | description        | debit   | credit  | running_balance | reference |
-    |----------------|------------|--------------------|---------|---------|-----------------|-----------|
-    | 1              | 2024-01-01 | SALARY CREDIT      |         | 50000.00| 75000.00        | SAL001    |
-    | 2              | 2024-01-02 | ATM WITHDRAWAL 1234| 5000.00 |         | 70000.00        | ATM123    |
-
-2.  **Debug Logs (`debug_logs/` directory)**: For troubleshooting, the script saves the intermediate files in this directory.
-    - `page_{n}_markdown.txt`: The Markdown content generated by Docling for each page.
-    - `page_{n}_llm_output.json`: The raw JSON output from the LLM for each page.
-    - `extracted_column_structure.json`: The column structure detected from the first page.
-
-## 🏗️ Architecture
+1. **Header Detection Phase**: Scans the first few pages to identify column structure, headers, and data types
+2. **Transaction Extraction Phase**: Processes all pages using the detected structure for consistent results
 
 ```mermaid
 graph TD
-    A[Input PDF] --> B{Split PDF into Pages};
-    B --> C[Page 1 PDF];
-    B --> D[Other Page PDFs];
-
-    C --> E[Docling: PDF to Markdown];
-    E --> F{LLM with First-Page Prompt};
-    F --> G[Transactions + Column Structure];
-    G --> H[Store Column Structure];
+    A[Input PDF] --> B[Step 1: Header Detection]
+    B --> C[Scan First 3 Pages]
+    C --> D[Extract Column Structure]
+    D --> E[Create Standardized Prompt]
     
-    D --> I[Docling: PDF to Markdown];
-    I --> J{LLM with Subsequent-Page Prompt};
-    H --> J;
-    J --> K[Transactions];
+    A --> F[Step 2: Transaction Extraction]
+    F --> G[Process All Pages]
+    E --> G
+    G --> H[Apply Same Prompt to Each Page]
+    H --> I[Aggregate Results]
+    I --> J[Generate CSV Output]
     
-    G --> L((Aggregate Data));
-    K --> L;
-    
-    L --> M[Save to Final CSV];
+    style B fill:#e1f5fe
+    style F fill:#f3e5f5
 ```
 
-## 🎨 Advanced Features
+## 📋 Prerequisites
 
-### Custom Table Detection
-```python
-from intelligent_page_parser import AdvancedPDFParser
+1. **Python 3.8+**
+2. **Ollama** with a compatible model:
+   ```bash
+   # Install Ollama from https://ollama.com/
+   # Pull a recommended model
+   ollama pull llama3:8b-instruct
+   ```
 
-parser = AdvancedPDFParser(
-    preserve_layout=True,
-    use_ocr=True,
-    table_extraction_methods=['camelot', 'pdfplumber']
-)
+## 🚀 Quick Start
 
-pages = parser.parse_pdf_comprehensive('statement.pdf', 'output')
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Run the extractor:**
+   ```bash
+   python final.py path/to/your/statement.pdf
+   ```
+
+3. **Check the output:**
+   - CSV file: `{filename}_extracted_transactions.csv`
+   - Debug logs: `debug_logs/` directory
+
+## 💾 Installation
+
+### Using pip (Recommended)
+```bash
+# Clone the repository
+git clone <repository-url>
+cd bank-statement-extractor
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### Processing Specific Page Ranges
-```python
-# Process only specific pages (implementation can be extended)
-parser.parse_pages_range('statement.pdf', 'output', pages=[1, 2, 3])
+### Using virtual environment
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-## 🔬 Technical Details
+## 🎮 Usage
 
-### Parsing Methods Comparison
+### Basic Usage
+```bash
+python final.py statement.pdf
+```
 
-| Method | Speed | Accuracy | Layout | Tables | Best For |
-|--------|-------|----------|--------|--------|----------|
-| Unstructured | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | General documents |
-| PDFPlumber | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Layout preservation |
-| PyMuPDF | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | Fast processing |
-| Camelot | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | Structured tables |
-| Tabula | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ | Stream tables |
+### Advanced Options
+```bash
+# Specify custom model
+python final.py statement.pdf --model llama3:70b-instruct
 
-### Performance Optimization
-- Parallel processing where possible
-- Smart caching of intermediate results
-- Memory-efficient handling of large documents
-- Progressive quality fallbacks
+# Custom output path
+python final.py statement.pdf --output my_transactions.csv
+
+# Help
+python final.py --help
+```
+
+### Command-Line Arguments
+| Argument | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `input_pdf` | ✅ | Path to the PDF bank statement | - |
+| `--model` | ❌ | Ollama model name | `llama3:8b-instruct` |
+| `--output` | ❌ | Output CSV file path | `{input}_extracted_transactions.csv` |
+
+## 📈 Output Format
+
+The tool generates a clean CSV file with standardized columns:
+
+| Column | Description | Example |
+|--------|-------------|---------|
+| `transaction_id` | Unique identifier | 1, 2, 3... |
+| `date` | Transaction date (YYYY-MM-DD) | 2024-01-15 |
+| `description` | Transaction description | "ATM WITHDRAWAL" |
+| `debit` | Debit amount (positive numbers) | 1500.00 |
+| `credit` | Credit amount (positive numbers) | 5000.00 |
+| `running_balance` | Account balance after transaction | 25000.00 |
+| `reference` | Reference number or code | "TXN123456" |
+
+### Sample Output
+```csv
+transaction_id,date,description,debit,credit,running_balance,reference
+1,2024-01-01,OPENING BALANCE,,,25000.00,
+2,2024-01-02,SALARY CREDIT,,50000.00,75000.00,SAL001
+3,2024-01-03,ATM WITHDRAWAL,2000.00,,73000.00,ATM123
+```
+
+## 🔍 Debug Information
+
+The tool creates a `debug_logs/` directory with helpful files:
+
+```
+debug_logs/
+├── detected_column_structure.json    # Column mapping detected from headers
+├── page_1_markdown.txt               # Docling's markdown output for each page
+├── page_1_transactions.json          # LLM's JSON response for each page
+├── page_2_markdown.txt
+├── page_2_transactions.json
+└── ...
+```
+
+## ⚙️ Configuration
+
+### Supported Bank Statement Formats
+
+The tool automatically detects various column layouts:
+
+- **Date + Description + Debit + Credit + Balance**
+- **Date + Particulars + Withdrawal + Deposit + Balance**
+- **Date + Narration + Amount + Balance + Reference**
+- And many other variations...
+
+### Model Recommendations
+
+| Model | Speed | Accuracy | Memory | Best For |
+|-------|-------|----------|--------|----------|
+| `llama3:8b-instruct` | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 8GB | Balanced performance |
+| `phi3:instruct` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | 4GB | Fast processing |
+| `llama3:70b-instruct` | ⭐⭐ | ⭐⭐⭐⭐⭐ | 40GB | Maximum accuracy |
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
-**Tesseract not found**:
-```bash
-# macOS
-brew install tesseract
+**❌ "No clear table structure found"**
+- Ensure the PDF contains actual tables (not just text)
+- Try a more powerful model like `llama3:70b-instruct`
+- Check if the first few pages contain the transaction table
 
-# Ubuntu
-sudo apt-get install tesseract-ocr
+**❌ "No transactions extracted"**
+- Verify the PDF contains transaction data
+- Check the `debug_logs/` for markdown output quality
+- Ensure Ollama is running: `ollama list`
 
-# Windows
-# Download from: https://github.com/UB-Mannheim/tesseract/wiki
-```
+**❌ "Model not found"**
+- Pull the model: `ollama pull llama3:8b-instruct`
+- Check available models: `ollama list`
 
-**Poor table extraction**:
-- Try different table extraction methods
-- Check if PDF has selectable text vs. scanned images
-- Adjust confidence thresholds
+**❌ Import errors**
+- Install requirements: `pip install -r requirements.txt`
+- Check Python version: `python --version` (needs 3.8+)
 
-**Low confidence scores**:
-- Enable OCR for scanned documents
-- Check PDF quality and resolution
-- Verify the document isn't password protected
+### Performance Tips
+
+- **For speed**: Use `phi3:instruct` model
+- **For accuracy**: Use `llama3:70b-instruct` model  
+- **For balance**: Use default `llama3:8b-instruct` model
+- **Large PDFs**: Process in smaller batches if memory issues occur
+
+## 🏗️ Architecture
+
+### Core Components
+
+1. **Header Extraction (`extract_headers_only`)**
+   - Scans first 3 pages for table structure
+   - Uses Docling for PDF → Markdown conversion
+   - Employs LLM to identify column mapping
+
+2. **Transaction Processing (`create_detailed_transaction_prompt`)**
+   - Creates standardized prompts based on detected structure
+   - Processes all pages with consistent mapping
+   - Handles multi-row transactions and edge cases
+
+3. **Pipeline Orchestration (`run_improved_docling_pipeline`)**
+   - Coordinates the entire extraction process
+   - Manages temporary files and cleanup
+   - Aggregates results into final CSV
+
+### Technology Stack
+
+- **PDF Processing**: [Docling](https://github.com/DS4SD/docling) with TableFormer
+- **LLM Integration**: [LangChain](https://langchain.com/) + [Ollama](https://ollama.com/)
+- **Data Processing**: [Pandas](https://pandas.pydata.org/)
+- **PDF Manipulation**: [PyPDF](https://pypdf.readthedocs.io/)
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
+4. Run tests (if available)
+5. Commit: `git commit -m 'Add amazing feature'`
+6. Push: `git push origin feature/amazing-feature`
+7. Open a Pull Request
 
-## 📄 License
+## 📝 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
-- [Unstructured](https://unstructured.io/) for document processing
-- [PDFPlumber](https://github.com/jsvine/pdfplumber) for layout analysis
-- [Camelot](https://camelot-py.readthedocs.io/) for table extraction
-- [PyMuPDF](https://pymupdf.readthedocs.io/) for PDF processing
-- [Tesseract](https://github.com/tesseract-ocr/tesseract) for OCR capabilities
+- **[Docling](https://github.com/DS4SD/docling)** - For excellent PDF table extraction
+- **[Ollama](https://ollama.com/)** - For local LLM capabilities
+- **[LangChain](https://langchain.com/)** - For LLM integration framework
 
 ---
 
-**Made with ❤️ for accurate bank statement processing** 
+**💡 Pro Tip**: Start with the default `llama3:8b-instruct` model. If you need better accuracy, upgrade to `llama3:70b-instruct`. If you need speed, try `phi3:instruct`. 
