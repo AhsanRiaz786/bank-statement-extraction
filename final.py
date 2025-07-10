@@ -19,6 +19,17 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from langchain_docling.loader import ExportType
 
+# Add imports for retry parser
+from langchain_core.output_parsers import RetryWithErrorOutputParser
+
+def create_parser_with_retry(parser: JsonOutputParser, model: ChatOllama) -> RetryWithErrorOutputParser:
+    """Creates a parser that can retry if the model outputs malformed JSON."""
+    return RetryWithErrorOutputParser.from_llm(
+        parser=parser,
+        llm=model,
+        max_retries=2
+    )
+
 def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int = 3) -> Optional[Dict[str, Any]]:
     """
     Scan the first few pages of the PDF to extract only the column headers/structure.
@@ -79,7 +90,10 @@ def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int 
     
     parser = JsonOutputParser()
     model = ChatOllama(model=model_name, temperature=0.1)
-    header_chain = header_extraction_prompt | model | parser
+    
+    # Use retry parser for robustness
+    retry_parser = create_parser_with_retry(parser, model)
+    header_chain = header_extraction_prompt | model | retry_parser
     
     # Try to extract headers from first few pages
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -201,9 +215,13 @@ def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int 
     print("No clear table structure found in the first few pages.")
     return None
 
-def create_detailed_transaction_prompt(column_structure: Dict[str, Any]) -> PromptTemplate:
+def create_detailed_transaction_prompt(
+    column_structure: Dict[str, Any], 
+    last_transaction: Optional[Dict[str, Any]] = None
+) -> PromptTemplate:
     """
     Create a detailed transaction extraction prompt based on your original specifications.
+    An optional last_transaction can be provided for context.
     """
     column_order = column_structure.get('column_order', [])
     total_columns = column_structure.get('total_columns', 0)
@@ -234,6 +252,22 @@ def create_detailed_transaction_prompt(column_structure: Dict[str, Any]) -> Prom
     example_json_raw = json.dumps(example_transaction, indent=6)
     example_json = example_json_raw.replace("{", "{{").replace("}", "}}")
     
+    # --- START: Add context from last transaction ---
+    context_section = ""
+    if last_transaction:
+        # Sanitize for prompt injection
+        safe_last_tx = {k: v for k, v in last_transaction.items() if isinstance(v, (str, int, float, bool) or v is None)}
+        last_tx_json = json.dumps(safe_last_tx, indent=2)
+        
+        context_section = f"""
+CONTEXT FROM PREVIOUS PAGE:
+- The previous page's last transaction was: {last_tx_json}
+- Ensure all fields in the new transactions you extract follow the SAME data format.
+- For example, if 'running_balance' was a number, it must remain a number. If a date was 'YYYY-MM-DD', new dates must also be in that format.
+- Apply this formatting logic to ALL columns to maintain consistency.
+"""
+    # --- END: Add context from last transaction ---
+
     template = f"""You are a data extraction engine. Analyze the bank statement text provided below. Extract ONLY the transaction line items visible on this page using the standardized column mapping.
 
 COLUMN MAPPING (based on detected structure):
@@ -244,7 +278,7 @@ CRITICAL INSTRUCTIONS FOR COLUMN MAPPING:
 2. Map data from each column position to the corresponding standardized field.
 3. Look for the table structure even if headers are missing - the data should follow the same column order.
 4. IMPORTANT: Use column position (1st, 2nd, 3rd, etc.) not header names for mapping.
-
+{context_section}
 Instructions:
 1. Output a JSON array [...] of transaction objects, no other text or keys.
 2. Dates must be in YYYY-MM-DD format.
@@ -359,22 +393,24 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
         position = col.get('position', '?')
         print(f"  {position}: {header_name} → {standardized_field}")
     
-    # Step 2: Create standardized prompt
+    # Step 2: Set up model and parser
     print("\n" + "="*60)
-    print("STEP 2: CREATING STANDARDIZED EXTRACTION PROMPT")
+    print("STEP 2: PREPARING EXTRACTION MODEL")
     print("="*60)
     
-    transaction_prompt = create_detailed_transaction_prompt(column_structure)
+    # Initialize these once
     parser = JsonOutputParser()
     model = ChatOllama(model=model_name, temperature=0.1)
-    transaction_chain = transaction_prompt | model | parser
-    
+    retry_parser = create_parser_with_retry(parser, model)
+    print("✓ Model and retry parser are ready.")
+
     # Step 3: Process all pages with the same prompt
     print("\n" + "="*60)
     print("STEP 3: EXTRACTING TRANSACTIONS FROM ALL PAGES")
     print("="*60)
     
     all_transactions = []
+    last_successful_transaction = None # To provide context to the next page
     
     with tempfile.TemporaryDirectory() as temp_dir:
         # Split PDF into pages
@@ -392,10 +428,17 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
             
         page_files = sorted(glob.glob(os.path.join(temp_dir, "*.pdf")))
         
-        # Process each page with the SAME prompt
+        # Process each page, now with context
         for i, page_pdf in enumerate(page_files):
             page_num = i + 1
             print(f"\n--- Processing Page {page_num} of {len(page_files)} ---")
+            
+            # Create a new prompt for each page, potentially with context
+            transaction_prompt = create_detailed_transaction_prompt(
+                column_structure,
+                last_transaction=last_successful_transaction
+            )
+            transaction_chain = transaction_prompt | model | retry_parser
             
             # Convert to markdown
             pipeline_options = PdfPipelineOptions(do_table_structure=True)
@@ -422,7 +465,7 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                 with open(os.path.join(debug_dir, f"page_{page_num}_markdown.txt"), "w", encoding="utf-8") as f:
                     f.write(markdown_content)
                 
-                # Extract transactions using the SAME prompt for all pages
+                # Extract transactions using the context-aware prompt
                 result = transaction_chain.invoke({"document_text": markdown_content})
                 
                 # Save LLM output
@@ -457,8 +500,12 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                                         # In case of any other parsing error, keep original
                                         pass
                                         
-                    all_transactions.extend(valid_transactions)
-                    print(f"✓ Extracted {len(valid_transactions)} transactions from page {page_num}")
+                    if valid_transactions:
+                        all_transactions.extend(valid_transactions)
+                        last_successful_transaction = valid_transactions[-1] # Update context
+                        print(f"✓ Extracted {len(valid_transactions)} transactions from page {page_num}")
+                    else:
+                        print(f"ⓘ No transactions found on page {page_num}")
                 else:
                     print(f"⚠ Invalid response format from page {page_num}: {type(result)}")
                     
@@ -501,7 +548,7 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
         print(f"❌ Error saving results: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Improved bank statement extraction with header-first approach")
+    parser = argparse.ArgumentParser(description="Improved bank statement extraction with header-first and context-aware approach")
     parser.add_argument("input_pdf", help="Path to the input PDF file")
     parser.add_argument("--model", default="llama3:8b-instruct", help="Ollama model name")
     parser.add_argument("--output", help="Output CSV file path")
