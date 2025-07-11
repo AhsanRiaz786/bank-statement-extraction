@@ -1,7 +1,6 @@
 # 🏦 Enterprise Bank Statement Extractor
 
 **Version:** 2.0.0  
-**License:** MIT  
 **Python:** 3.8+  
 
 A production-ready, privacy-focused bank statement extraction system that leverages advanced document parsing and local Large Language Models for intelligent transaction data extraction from PDF bank statements.
@@ -653,8 +652,3 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 
 ---
 
-**📧 Contact**: For enterprise support and custom implementations, contact: [support@yourcompany.com]
-
-**🌐 Website**: [https://yourcompany.com/bank-statement-extractor]
-
-**💡 Pro Tip**: Start with `llama3.1:8b` for optimal balance of speed and accuracy. Upgrade to `llama3.1:70b` for maximum precision on complex statements. 
