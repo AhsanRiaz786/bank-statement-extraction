@@ -19,6 +19,41 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from langchain_docling.loader import ExportType
 
+def clean_monetary_value(value):
+    """Clean monetary values to ensure they are pure numbers."""
+    if value is None or value == "":
+        return None
+    
+    # Convert to string if it's not already
+    str_value = str(value).strip()
+    
+    if not str_value or str_value.lower() in ['null', 'none', 'n/a', '-']:
+        return None
+    
+    # Remove common monetary suffixes and prefixes
+    # Remove Cr, Dr, Credit, Debit (case insensitive)
+    import re
+    str_value = re.sub(r'\b(cr|dr|credit|debit)\b', '', str_value, flags=re.IGNORECASE)
+    
+    # Remove currency symbols and common prefixes
+    str_value = re.sub(r'[₹$£€¥₹Rs\.USD\s]', '', str_value)
+    
+    # Remove commas
+    str_value = str_value.replace(',', '')
+    
+    # Remove any remaining non-digit characters except decimal point and minus
+    str_value = re.sub(r'[^\d\.\-]', '', str_value)
+    
+    # Handle empty string after cleaning
+    if not str_value:
+        return None
+    
+    try:
+        # Convert to float and take absolute value (we want positive numbers)
+        return abs(float(str_value))
+    except (ValueError, TypeError):
+        return None
+
 def parse_with_retry(chain, input_data: dict, max_retries: int = 2):
     """Parse with retry logic for malformed JSON responses."""
     for attempt in range(max_retries + 1):
@@ -270,35 +305,73 @@ CONTEXT FROM PREVIOUS PAGE:
 """
     # --- END: Add context from last transaction ---
 
-    template = f"""You are a data extraction engine. Analyze the bank statement text provided below. Extract ONLY the transaction line items visible on this page using the standardized column mapping.
+    template = f"""You are a precise bank statement data extraction engine. Your PRIMARY GOAL is to extract EVERY SINGLE transaction that has a date - NEVER skip any transaction row.
 
 COLUMN MAPPING (based on detected structure):
 {field_desc_text}
 
-CRITICAL INSTRUCTIONS FOR COLUMN MAPPING:
-1. Even if column headers are NOT visible on this page, use the column positions from above.
-2. Map data from each column position to the corresponding standardized field.
-3. Look for the table structure even if headers are missing - the data should follow the same column order.
-4. IMPORTANT: Use column position (1st, 2nd, 3rd, etc.) not header names for mapping.
+CRITICAL EXTRACTION RULES:
+1. EXTRACT EVERY ROW that contains a date - this is MANDATORY
+2. Even if column headers are NOT visible on this page, use the column positions from above
+3. Map data from each column position to the corresponding standardized field
+4. Look for the table structure even if headers are missing - data follows the same column order
+5. Use column position (1st, 2nd, 3rd, etc.) not header names for mapping
 {context_section}
-Instructions:
-1. Output a JSON array [...] of transaction objects, no other text or keys.
-2. Dates must be in YYYY-MM-DD format.
-3. Monetary values must be numbers, remove currency symbols (e.g., "Rs.1,250.50" → 1250.50).
-4. Use null for missing values.
-5. Do NOT extract numbers from descriptions as debit, credit, or balance.
-6. If the page is blank, return an empty array.
-7. If the page is not a bank statement, return an empty array.
-8. Some transactions can span across multiple rows, so extract all information from the rows.
-9. If transaction columns are marked with indicators like withdrawal, deposit, credit, debit then retrieve the information as it is.
-10. If debit or credit transactions are present in one column then figure out the transaction type from context.
-11. ONLY include fields that actually exist in the document. Do not create placeholder fields.
-12. ONLY RETURN THE JSON ARRAY AND NOTHING ELSE. NO EXTRA TEXT OR COMMENTS.
-13. Extract ALL transaction rows visible on this page.
-14. Multi-row transactions should be combined into single entries.
-15. Preserve all original data accuracy, don't infer missing values.
-16. Things like "Opening Balance as of 01-JAN-23" should be ignored.
-17. Credit and Debit, withdrawal and deposit should always be postive. Don't add any negative sign to them.
+
+MANDATORY EXTRACTION INSTRUCTIONS:
+1. Scan the ENTIRE page systematically from top to bottom
+2. Look for ANY row that contains a date (in ANY format: DD-MM-YYYY, MM/DD/YYYY, DD/MM/YY, etc.)
+3. If you find a date, that row MUST be extracted as a transaction - NO EXCEPTIONS
+4. Some transactions may span multiple rows - combine them into single entries
+5. Look for dates even in merged cells, partial tables, or broken table structures
+6. Extract transactions even if some columns are empty or missing
+7. DO NOT skip transactions because of formatting issues or unclear data
+
+DATA FORMATTING RULES:
+1. Output a JSON array [...] of transaction objects, no other text or keys
+2. Convert ALL dates to YYYY-MM-DD format (parse flexibly: 01-Jan-2024 → 2024-01-01)
+3. MONETARY VALUES MUST BE PURE NUMBERS ONLY:
+   - Remove ALL text suffixes: "1,250.50 Cr" → 1250.50
+   - Remove ALL currency symbols: "Rs.1,250.50" → 1250.50  
+   - Remove ALL prefixes/suffixes: "Dr 500.00", "500.00 Dr", "500.00 Cr" → 500.00
+   - Remove commas from numbers: "1,250.50" → 1250.50
+   - Convert to decimal numbers: 1250.50 (NOT strings)
+4. Use null for missing values, but still include the transaction
+5. Do NOT extract numbers from descriptions as debit, credit, or balance
+6. Credit and Debit, withdrawal and deposit should always be positive numbers
+7. Preserve all original description text exactly as written
+
+CRITICAL MONETARY CLEANING EXAMPLES:
+- "1,142,432.00Cr" → 1142432.00
+- "Rs.50,000.00" → 50000.00
+- "5000 Dr" → 5000.00
+- "2,500.75 Cr" → 2500.75
+- "$1,000.00" → 1000.00
+
+WHAT TO IGNORE (but still check for dates):
+- Page headers/footers without dates
+- Opening/closing balance statements WITHOUT transaction dates
+- Summary rows without specific transaction dates
+- Account information sections
+
+WHAT TO ALWAYS EXTRACT:
+- ANY row with a transaction date
+- Transaction descriptions (even if incomplete)
+- Any monetary amounts in the correct columns
+- Reference numbers or transaction IDs
+- Running balances when available
+
+CRITICAL: If the page is completely blank or contains no dates whatsoever, return an empty array. Otherwise, you MUST extract every single row that contains a date.
+
+VERIFICATION CHECKLIST before outputting:
+☐ Did I scan the ENTIRE page for dates?
+☐ Did I extract EVERY row that contains a date?
+☐ Did I check for multi-row transactions?
+☐ Did I look in broken or partial tables?
+☐ Are all dates in YYYY-MM-DD format?
+☐ Are all monetary values positive numbers?
+
+ONLY RETURN THE JSON ARRAY AND NOTHING ELSE. NO EXTRA TEXT OR COMMENTS.
 EXAMPLE:
 ```markdown
 | Date       | Particulars         | Withdrawal | Deposit | Balance  | Reference |
@@ -476,16 +549,22 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                 if isinstance(result, list):
                     valid_transactions = [tx for tx in result if tx and isinstance(tx, dict)]
                     
-                    # Post-process to ensure debit/credit fields are always positive
+                    # Post-process to clean all monetary fields
+                    for tx in valid_transactions:
+                        for col_info in column_structure.get('column_order', []):
+                            field = col_info.get('standardized_field')
+                            data_type = col_info.get('data_type')
+                            
+                            # Clean monetary fields (debit, credit, balance)
+                            if data_type in ['debit', 'credit', 'balance'] and field in tx:
+                                tx[field] = clean_monetary_value(tx[field])
+                    
+                    # Additional cleanup for positive_fields (legacy support)
                     if positive_fields:
                         for tx in valid_transactions:
                             for field in positive_fields:
                                 if field in tx and tx[field] is not None:
-                                    try:
-                                        numeric_value = float(tx[field])
-                                        tx[field] = abs(numeric_value)
-                                    except (ValueError, TypeError):
-                                        pass  # Keep non-numeric values as is
+                                    tx[field] = clean_monetary_value(tx[field])
                                         
                     # Post-process to standardize date formats
                     if date_fields:
