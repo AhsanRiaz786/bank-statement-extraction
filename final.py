@@ -19,16 +19,19 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from langchain_docling.loader import ExportType
 
-# Add imports for retry parser
-from langchain_core.output_parsers import RetryWithErrorOutputParser
-
-def create_parser_with_retry(parser: JsonOutputParser, model: ChatOllama) -> RetryWithErrorOutputParser:
-    """Creates a parser that can retry if the model outputs malformed JSON."""
-    return RetryWithErrorOutputParser.from_llm(
-        parser=parser,
-        llm=model,
-        max_retries=2
-    )
+def parse_with_retry(chain, input_data: dict, max_retries: int = 2):
+    """Parse with retry logic for malformed JSON responses."""
+    for attempt in range(max_retries + 1):
+        try:
+            result = chain.invoke(input_data)
+            return result
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"  ⚠ Parse attempt {attempt + 1} failed: {e}. Retrying...")
+                continue
+            else:
+                print(f"  ❌ All parse attempts failed. Last error: {e}")
+                raise e
 
 def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int = 3) -> Optional[Dict[str, Any]]:
     """
@@ -90,10 +93,7 @@ def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int 
     
     parser = JsonOutputParser()
     model = ChatOllama(model=model_name, temperature=0.1)
-    
-    # Use retry parser for robustness
-    retry_parser = create_parser_with_retry(parser, model)
-    header_chain = header_extraction_prompt | model | retry_parser
+    header_chain = header_extraction_prompt | model | parser
     
     # Try to extract headers from first few pages
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -132,7 +132,7 @@ def extract_headers_only(pdf_path: str, model_name: str, max_pages_to_scan: int 
                 
                 # Try to extract headers
                 try:
-                    result = header_chain.invoke({"document_text": markdown_content})
+                    result = parse_with_retry(header_chain, {"document_text": markdown_content})
                     
                     if (isinstance(result, dict) and 
                         result.get('column_structure', {}).get('table_found', False) and
@@ -258,10 +258,12 @@ def create_detailed_transaction_prompt(
         # Sanitize for prompt injection
         safe_last_tx = {k: v for k, v in last_transaction.items() if isinstance(v, (str, int, float, bool) or v is None)}
         last_tx_json = json.dumps(safe_last_tx, indent=2)
+        # Escape all curly braces for LangChain template
+        escaped_json = last_tx_json.replace("{", "{{").replace("}", "}}")
         
         context_section = f"""
 CONTEXT FROM PREVIOUS PAGE:
-- The previous page's last transaction was: {last_tx_json}
+- The previous page's last transaction was: {escaped_json}
 - Ensure all fields in the new transactions you extract follow the SAME data format.
 - For example, if 'running_balance' was a number, it must remain a number. If a date was 'YYYY-MM-DD', new dates must also be in that format.
 - Apply this formatting logic to ALL columns to maintain consistency.
@@ -401,8 +403,7 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
     # Initialize these once
     parser = JsonOutputParser()
     model = ChatOllama(model=model_name, temperature=0.1)
-    retry_parser = create_parser_with_retry(parser, model)
-    print("✓ Model and retry parser are ready.")
+    print("✓ Model and parser are ready.")
 
     # Step 3: Process all pages with the same prompt
     print("\n" + "="*60)
@@ -438,7 +439,7 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                 column_structure,
                 last_transaction=last_successful_transaction
             )
-            transaction_chain = transaction_prompt | model | retry_parser
+            transaction_chain = transaction_prompt | model | parser
             
             # Convert to markdown
             pipeline_options = PdfPipelineOptions(do_table_structure=True)
@@ -466,7 +467,7 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
                     f.write(markdown_content)
                 
                 # Extract transactions using the context-aware prompt
-                result = transaction_chain.invoke({"document_text": markdown_content})
+                result = parse_with_retry(transaction_chain, {"document_text": markdown_content})
                 
                 # Save LLM output
                 with open(os.path.join(debug_dir, f"page_{page_num}_transactions.json"), "w", encoding="utf-8") as f:
