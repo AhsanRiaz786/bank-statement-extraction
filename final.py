@@ -49,7 +49,9 @@ def clean_monetary_value(value):
         return None
     
     try:
-        # Convert to float and take absolute value (we want positive numbers)
+        # Convert to float and take absolute value (monetary amounts should always be positive)
+        # Debit means "money out" but the amount itself should be positive
+        # Credit means "money in" and the amount should be positive
         return abs(float(str_value))
     except (ValueError, TypeError):
         return None
@@ -338,15 +340,20 @@ DATA FORMATTING RULES:
    - Convert to decimal numbers: 1250.50 (NOT strings)
 4. Use null for missing values, but still include the transaction
 5. Do NOT extract numbers from descriptions as debit, credit, or balance
-6. Credit and Debit, withdrawal and deposit should always be positive numbers
+6. CRITICAL: All monetary amounts must be POSITIVE numbers:
+   - Debit amounts should be positive (e.g., 500.00, NOT -500.00)
+   - Credit amounts should be positive (e.g., 1000.00, NOT -1000.00) 
+   - Debit already means "money out", so don't make it negative
+   - Credit already means "money in", so keep it positive
 7. Preserve all original description text exactly as written
 
 CRITICAL MONETARY CLEANING EXAMPLES:
-- "1,142,432.00Cr" → 1142432.00
-- "Rs.50,000.00" → 50000.00
-- "5000 Dr" → 5000.00
-- "2,500.75 Cr" → 2500.75
-- "$1,000.00" → 1000.00
+- "1,142,432.00Cr" → 1142432.00 (credit amount, positive)
+- "Rs.50,000.00" → 50000.00 (remove currency symbol)
+- "5000 Dr" → 5000.00 (debit amount, positive - NOT negative)
+- "2,500.75 Cr" → 2500.75 (credit amount, positive)
+- "$1,000.00" → 1000.00 (remove currency symbol)
+- "-500.00 Dr" → 500.00 (debit should be positive, remove minus sign)
 
 WHAT TO IGNORE (but still check for dates):
 - Page headers/footers without dates
@@ -630,7 +637,7 @@ def run_improved_docling_pipeline(pdf_path: str, model_name: str, output_path: s
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Improved bank statement extraction with header-first and context-aware approach")
     parser.add_argument("input_pdf", help="Path to the input PDF file")
-    parser.add_argument("--model", default="llama3:8b-instruct", help="Ollama model name")
+    parser.add_argument("--model", default="llama3.1:8b", help="Ollama model name")
     parser.add_argument("--output", help="Output CSV file path")
     
     args = parser.parse_args()
